@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Match,
+  MatchStatus,
   Team,
   Player,
   MatchUpdate,
@@ -65,6 +66,13 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
     match.winnerTeamId || ''
   );
   const [newUpdateText, setNewUpdateText] = useState('');
+
+  useEffect(() => {
+    setMatchStatusInput(match.status);
+    setT1ScoreInput(match.team1ScoreDisplay || '');
+    setT2ScoreInput(match.team2ScoreDisplay || '');
+    setWinnerTeamInput(match.winnerTeamId || '');
+  }, [match.status, match.team1ScoreDisplay, match.team2ScoreDisplay, match.winnerTeamId]);
 
   // Series helpers
   const cricketSeries: DetailedCricketSeries | null =
@@ -280,24 +288,26 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
     let draws = 0;
 
     const updatedTests = cricketSeries.tests.map((t) => {
-      const updated = t.id === testId ? { ...t, ...partial } : t;
-      if (updated.winnerTeamId === 'team1') t1Wins++;
-      else if (updated.winnerTeamId === 'team2') t2Wins++;
-      else if (updated.winnerTeamId === 'draw') draws++;
+      let updated = t.id === testId ? { ...t, ...partial } : t;
+      if (updated.status === 'upcoming') {
+        updated = { ...updated, winnerTeamId: null };
+      }
+      if (updated.status === 'completed') {
+        if (updated.winnerTeamId === 'team1') t1Wins++;
+        else if (updated.winnerTeamId === 'team2') t2Wins++;
+        else if (updated.winnerTeamId === 'draw') draws++;
+      }
       return updated;
     });
 
     const isSeriesDecided =
       t1Wins >= 3 || t2Wins >= 3 || updatedTests.every((t) => t.status === 'completed');
-    let overallWinner: 'team1' | 'team2' | null = null;
-    let status = match.status;
+    let overallWinner: 'team1' | 'team2' | null = match.winnerTeamId || null;
 
     if (t1Wins > t2Wins && isSeriesDecided) {
       overallWinner = 'team1';
-      status = 'completed';
     } else if (t2Wins > t1Wins && isSeriesDecided) {
       overallWinner = 'team2';
-      status = 'completed';
     }
 
     const updatedSeries: DetailedCricketSeries = {
@@ -310,22 +320,9 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
 
     onUpdateMatch({
       ...match,
-      status,
       winnerTeamId: overallWinner,
       team1ScoreDisplay: String(t1Wins),
       team2ScoreDisplay: String(t2Wins),
-      team1PointsAwarded:
-        overallWinner === 'team1'
-          ? match.basePoints
-          : overallWinner === 'team2'
-          ? match.consolationPoints
-          : undefined,
-      team2PointsAwarded:
-        overallWinner === 'team2'
-          ? match.basePoints
-          : overallWinner === 'team1'
-          ? match.consolationPoints
-          : undefined,
       detailedScore: { type: 'cricket_series', data: updatedSeries },
     });
   };
@@ -406,26 +403,51 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
   const handleUpdateSmashGame = (gameId: string, partial: Partial<SmashKartsGame>) => {
     if (!isAdmin || !smashSeries) return;
 
+    let t1Wins = 0;
+    let t2Wins = 0;
+
     const updatedGames = smashSeries.games.map((g) => {
-      if (g.id !== gameId) return g;
+      if (g.id !== gameId) {
+        if (g.status === 'completed') {
+          if (g.winnerTeamId === 'team1') t1Wins++;
+          else if (g.winnerTeamId === 'team2') t2Wins++;
+        }
+        return g;
+      }
       const updated = { ...g, ...partial };
-      if (updated.team1Score > updated.team2Score && (updated.team1Score > 0 || updated.team2Score > 0)) {
-        updated.winnerTeamId = 'team1';
-        updated.status = 'completed';
-      } else if (updated.team2Score > updated.team1Score && (updated.team1Score > 0 || updated.team2Score > 0)) {
-        updated.winnerTeamId = 'team2';
-        updated.status = 'completed';
+      if (!partial.status) {
+        if (updated.team1Score > updated.team2Score && (updated.team1Score > 0 || updated.team2Score > 0)) {
+          updated.winnerTeamId = 'team1';
+          updated.status = 'completed';
+        } else if (updated.team2Score > updated.team1Score && (updated.team1Score > 0 || updated.team2Score > 0)) {
+          updated.winnerTeamId = 'team2';
+          updated.status = 'completed';
+        }
+      }
+      if (updated.status === 'upcoming') {
+        updated.winnerTeamId = null;
+      }
+      if (updated.status === 'completed') {
+        if (updated.winnerTeamId === 'team1') t1Wins++;
+        else if (updated.winnerTeamId === 'team2') t2Wins++;
       }
       return updated;
     });
 
+    const seriesWinner = t1Wins >= smashSeries.targetWins ? 'team1' : t2Wins >= smashSeries.targetWins ? 'team2' : match.winnerTeamId || null;
+
     const updatedSeries: DetailedSmashKartsSeries = {
       ...smashSeries,
+      team1SeriesWins: t1Wins,
+      team2SeriesWins: t2Wins,
       games: updatedGames,
     };
 
     const updatedMatch: Match = {
       ...match,
+      winnerTeamId: seriesWinner,
+      team1ScoreDisplay: String(t1Wins),
+      team2ScoreDisplay: String(t2Wins),
       detailedScore: { type: 'smash_karts_series', data: updatedSeries },
     };
 
@@ -441,14 +463,18 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
     let t1Wins = 0;
     let t2Wins = 0;
     const updatedGames = badmintonSeries.games.map((g) => {
-      const updated = g.id === gameId ? { ...g, ...partial } : g;
-      if (updated.winnerTeamId === 'team1') t1Wins++;
-      else if (updated.winnerTeamId === 'team2') t2Wins++;
+      let updated = g.id === gameId ? { ...g, ...partial } : g;
+      if (updated.status === 'upcoming') {
+        updated = { ...updated, winnerTeamId: null };
+      }
+      if (updated.status === 'completed') {
+        if (updated.winnerTeamId === 'team1') t1Wins++;
+        else if (updated.winnerTeamId === 'team2') t2Wins++;
+      }
       return updated;
     });
 
-    const isWinner = t1Wins >= badmintonSeries.targetWins || t2Wins >= badmintonSeries.targetWins;
-    const seriesWinner = t1Wins >= badmintonSeries.targetWins ? 'team1' : t2Wins >= badmintonSeries.targetWins ? 'team2' : null;
+    const seriesWinner = t1Wins >= badmintonSeries.targetWins ? 'team1' : t2Wins >= badmintonSeries.targetWins ? 'team2' : match.winnerTeamId || null;
 
     const updatedSeries: DetailedBadmintonSeries = {
       ...badmintonSeries,
@@ -457,16 +483,15 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
       games: updatedGames,
     };
 
-    onUpdateMatch({
+    const updatedMatch: Match = {
       ...match,
-      status: isWinner ? 'completed' : match.status,
       winnerTeamId: seriesWinner,
       team1ScoreDisplay: String(t1Wins),
       team2ScoreDisplay: String(t2Wins),
-      team1PointsAwarded: seriesWinner === 'team1' ? match.basePoints : seriesWinner === 'team2' ? match.consolationPoints : undefined,
-      team2PointsAwarded: seriesWinner === 'team2' ? match.basePoints : seriesWinner === 'team1' ? match.consolationPoints : undefined,
       detailedScore: { type: 'badminton_series', data: updatedSeries },
-    });
+    };
+
+    onUpdateMatch(recalculateMatchOutcome(updatedMatch));
   };
 
   // -------------------------------------------------------------
@@ -478,14 +503,18 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
     let t1Wins = 0;
     let t2Wins = 0;
     const updatedGames = footvolleySeries.games.map((g) => {
-      const updated = g.id === gameId ? { ...g, ...partial } : g;
-      if (updated.winnerTeamId === 'team1') t1Wins++;
-      else if (updated.winnerTeamId === 'team2') t2Wins++;
+      let updated = g.id === gameId ? { ...g, ...partial } : g;
+      if (updated.status === 'upcoming') {
+        updated = { ...updated, winnerTeamId: null };
+      }
+      if (updated.status === 'completed') {
+        if (updated.winnerTeamId === 'team1') t1Wins++;
+        else if (updated.winnerTeamId === 'team2') t2Wins++;
+      }
       return updated;
     });
 
-    const isWinner = t1Wins >= footvolleySeries.targetWins || t2Wins >= footvolleySeries.targetWins;
-    const seriesWinner = t1Wins >= footvolleySeries.targetWins ? 'team1' : t2Wins >= footvolleySeries.targetWins ? 'team2' : null;
+    const seriesWinner = t1Wins >= footvolleySeries.targetWins ? 'team1' : t2Wins >= footvolleySeries.targetWins ? 'team2' : match.winnerTeamId || null;
 
     const updatedSeries: DetailedFootvolleySeries = {
       ...footvolleySeries,
@@ -494,16 +523,15 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
       games: updatedGames,
     };
 
-    onUpdateMatch({
+    const updatedMatch: Match = {
       ...match,
-      status: isWinner ? 'completed' : match.status,
       winnerTeamId: seriesWinner,
       team1ScoreDisplay: String(t1Wins),
       team2ScoreDisplay: String(t2Wins),
-      team1PointsAwarded: seriesWinner === 'team1' ? match.basePoints : seriesWinner === 'team2' ? match.consolationPoints : undefined,
-      team2PointsAwarded: seriesWinner === 'team2' ? match.basePoints : seriesWinner === 'team1' ? match.consolationPoints : undefined,
       detailedScore: { type: 'footvolley_series', data: updatedSeries },
-    });
+    };
+
+    onUpdateMatch(recalculateMatchOutcome(updatedMatch));
   };
 
   // -------------------------------------------------------------
@@ -520,7 +548,7 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
 
     const isT1Winner = newT1 >= 30;
     const isT2Winner = newT2 >= 30;
-    const winner: 'team1' | 'team2' | null = isT1Winner ? 'team1' : isT2Winner ? 'team2' : null;
+    const winner: 'team1' | 'team2' | null = isT1Winner ? 'team1' : isT2Winner ? 'team2' : match.winnerTeamId || null;
 
     const updatedBball: DetailedBasketballRace30 = {
       ...bballRace,
@@ -529,26 +557,15 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
       winnerTeamId: winner,
     };
 
-    onUpdateMatch({
+    const updatedMatch: Match = {
       ...match,
-      status: winner ? 'completed' : 'live',
       winnerTeamId: winner,
       team1ScoreDisplay: String(newT1),
       team2ScoreDisplay: String(newT2),
-      team1PointsAwarded:
-        winner === 'team1'
-          ? match.basePoints
-          : winner === 'team2'
-          ? match.consolationPoints
-          : undefined,
-      team2PointsAwarded:
-        winner === 'team2'
-          ? match.basePoints
-          : winner === 'team1'
-          ? match.consolationPoints
-          : undefined,
       detailedScore: { type: 'basketball_race30', data: updatedBball },
-    });
+    };
+
+    onUpdateMatch(recalculateMatchOutcome(updatedMatch));
   };
 
   // -------------------------------------------------------------
@@ -562,8 +579,10 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
 
     const updatedGames = tableTennisSeries.games.map((g) => {
       if (g.id !== gameId) {
-        if (g.winnerTeamId === 'team1') t1Wins++;
-        else if (g.winnerTeamId === 'team2') t2Wins++;
+        if (g.status === 'completed') {
+          if (g.winnerTeamId === 'team1') t1Wins++;
+          else if (g.winnerTeamId === 'team2') t2Wins++;
+        }
         return g;
       }
       const updated = { ...g, ...partial };
@@ -581,7 +600,7 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
       updated.team1SetsWon = t1Sets;
       updated.team2SetsWon = t2Sets;
 
-      if (!partial.winnerTeamId) {
+      if (!partial.status && !partial.winnerTeamId) {
         if (t1Sets >= 2) {
           updated.winnerTeamId = 'team1';
           updated.status = 'completed';
@@ -593,14 +612,19 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
         }
       }
 
-      if (updated.winnerTeamId === 'team1') t1Wins++;
-      else if (updated.winnerTeamId === 'team2') t2Wins++;
+      if (updated.status === 'upcoming') {
+        updated.winnerTeamId = null;
+      }
+
+      if (updated.status === 'completed') {
+        if (updated.winnerTeamId === 'team1') t1Wins++;
+        else if (updated.winnerTeamId === 'team2') t2Wins++;
+      }
 
       return updated;
     });
 
-    const isWinner = t1Wins >= tableTennisSeries.targetWins || t2Wins >= tableTennisSeries.targetWins;
-    const seriesWinner = t1Wins >= tableTennisSeries.targetWins ? 'team1' : t2Wins >= tableTennisSeries.targetWins ? 'team2' : null;
+    const seriesWinner = t1Wins >= tableTennisSeries.targetWins ? 'team1' : t2Wins >= tableTennisSeries.targetWins ? 'team2' : match.winnerTeamId || null;
 
     const updatedSeries: DetailedTableTennisSeries = {
       ...tableTennisSeries,
@@ -609,16 +633,15 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
       games: updatedGames,
     };
 
-    onUpdateMatch({
+    const updatedMatch: Match = {
       ...match,
-      status: isWinner ? 'completed' : (t1Wins > 0 || t2Wins > 0 ? 'live' : match.status),
       winnerTeamId: seriesWinner,
       team1ScoreDisplay: String(t1Wins),
       team2ScoreDisplay: String(t2Wins),
-      team1PointsAwarded: seriesWinner === 'team1' ? match.basePoints : seriesWinner === 'team2' ? match.consolationPoints : undefined,
-      team2PointsAwarded: seriesWinner === 'team2' ? match.basePoints : seriesWinner === 'team1' ? match.consolationPoints : undefined,
       detailedScore: { type: 'table_tennis_series', data: updatedSeries },
-    });
+    };
+
+    onUpdateMatch(recalculateMatchOutcome(updatedMatch));
   };
 
   // -------------------------------------------------------------
@@ -632,12 +655,14 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
 
     const updatedGames = stumbleGuysSeries.games.map((g) => {
       if (g.id !== gameId) {
-        if (g.winnerTeamId === 'team1') t1Wins++;
-        else if (g.winnerTeamId === 'team2') t2Wins++;
+        if (g.status === 'completed') {
+          if (g.winnerTeamId === 'team1') t1Wins++;
+          else if (g.winnerTeamId === 'team2') t2Wins++;
+        }
         return g;
       }
       const updated = { ...g, ...partial };
-      if (!partial.winnerTeamId) {
+      if (!partial.status && !partial.winnerTeamId) {
         if (updated.team1Score > updated.team2Score && (updated.team1Score > 0 || updated.team2Score > 0)) {
           updated.winnerTeamId = 'team1';
           updated.status = 'completed';
@@ -647,14 +672,19 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
         }
       }
 
-      if (updated.winnerTeamId === 'team1') t1Wins++;
-      else if (updated.winnerTeamId === 'team2') t2Wins++;
+      if (updated.status === 'upcoming') {
+        updated.winnerTeamId = null;
+      }
+
+      if (updated.status === 'completed') {
+        if (updated.winnerTeamId === 'team1') t1Wins++;
+        else if (updated.winnerTeamId === 'team2') t2Wins++;
+      }
 
       return updated;
     });
 
-    const isWinner = t1Wins >= stumbleGuysSeries.targetWins || t2Wins >= stumbleGuysSeries.targetWins;
-    const seriesWinner = t1Wins >= stumbleGuysSeries.targetWins ? 'team1' : t2Wins >= stumbleGuysSeries.targetWins ? 'team2' : null;
+    const seriesWinner = t1Wins >= stumbleGuysSeries.targetWins ? 'team1' : t2Wins >= stumbleGuysSeries.targetWins ? 'team2' : match.winnerTeamId || null;
 
     const updatedSeries: DetailedStumbleGuysSeries = {
       ...stumbleGuysSeries,
@@ -663,16 +693,15 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
       games: updatedGames,
     };
 
-    onUpdateMatch({
+    const updatedMatch: Match = {
       ...match,
-      status: isWinner ? 'completed' : (t1Wins > 0 || t2Wins > 0 ? 'live' : match.status),
       winnerTeamId: seriesWinner,
       team1ScoreDisplay: String(t1Wins),
       team2ScoreDisplay: String(t2Wins),
-      team1PointsAwarded: seriesWinner === 'team1' ? match.basePoints : seriesWinner === 'team2' ? match.consolationPoints : undefined,
-      team2PointsAwarded: seriesWinner === 'team2' ? match.basePoints : seriesWinner === 'team1' ? match.consolationPoints : undefined,
       detailedScore: { type: 'stumble_guys_series', data: updatedSeries },
-    });
+    };
+
+    onUpdateMatch(recalculateMatchOutcome(updatedMatch));
   };
 
   const handleDeleteStumbleGuysGame = (gameId: string) => {
@@ -805,7 +834,39 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {isAdmin ? (
+              <div className="flex items-center gap-1.5 bg-[#141824] border border-white/10 rounded-lg px-2.5 py-1 text-xs">
+                <span className="text-[10px] uppercase font-bold text-slate-400">Status:</span>
+                <select
+                  value={match.status}
+                  onChange={(e) => {
+                    const newStatus = e.target.value as MatchStatus;
+                    setMatchStatusInput(newStatus);
+                    onUpdateMatch({
+                      ...match,
+                      status: newStatus,
+                    });
+                  }}
+                  className="bg-transparent font-semibold text-white outline-none cursor-pointer"
+                >
+                  <option value="upcoming" className="bg-[#141824] text-white">Upcoming</option>
+                  <option value="live" className="bg-[#141824] text-amber-300">🔴 Live</option>
+                  <option value="completed" className="bg-[#141824] text-emerald-400">✓ Completed</option>
+                </select>
+              </div>
+            ) : (
+              <span className={`text-[10px] uppercase font-bold px-2.5 py-1 rounded-full border ${
+                match.status === 'live'
+                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/30 animate-pulse'
+                  : match.status === 'completed'
+                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                  : 'bg-white/5 text-slate-400 border-white/10'
+              }`}>
+                {match.status === 'live' ? '🔴 Live' : match.status === 'completed' ? '✓ Completed' : 'Upcoming'}
+              </span>
+            )}
+
             {isAdmin && onDeleteMatch && (
               <button
                 type="button"
@@ -1322,7 +1383,7 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
                     {/* Admin quick edit for this game */}
                     {editingItemId === g.id && isAdmin && (
                       <div className="w-full mt-2 pt-2 border-t border-white/10 space-y-2">
-                        <div className="grid grid-cols-4 gap-2">
+                        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                           <div>
                             <label className="text-[10px] text-slate-400 block">Type</label>
                             <select
@@ -1335,6 +1396,21 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
                             </select>
                           </div>
                           <div>
+                            <label className="text-[10px] text-slate-400 block">Status</label>
+                            <select
+                              value={g.status || 'upcoming'}
+                              onChange={(e) => handleUpdateSmashGame(g.id, {
+                                status: e.target.value as MatchStatus,
+                                ...(e.target.value === 'upcoming' ? { winnerTeamId: null } : {})
+                              })}
+                              className="w-full bg-[#0c0e15] border border-white/10 rounded px-2 py-1 text-white"
+                            >
+                              <option value="upcoming">Upcoming</option>
+                              <option value="live">Live</option>
+                              <option value="completed">Completed</option>
+                            </select>
+                          </div>
+                          <div>
                             <label className="text-[10px] text-slate-400 block">{team1.name}</label>
                             <input
                               type="number"
@@ -1342,7 +1418,6 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
                               onChange={(e) => handleUpdateSmashGame(g.id, {
                                 team1Score: Number(e.target.value) || 0,
                                 winnerTeamId: Number(e.target.value) > g.team2Score ? 'team1' : g.team2Score > Number(e.target.value) ? 'team2' : null,
-                                status: 'completed',
                               })}
                               className="w-full bg-[#0c0e15] border border-white/10 rounded px-2 py-1 text-white"
                             />
@@ -1355,12 +1430,11 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
                               onChange={(e) => handleUpdateSmashGame(g.id, {
                                 team2Score: Number(e.target.value) || 0,
                                 winnerTeamId: g.team1Score > Number(e.target.value) ? 'team1' : Number(e.target.value) > g.team1Score ? 'team2' : null,
-                                status: 'completed',
                               })}
                               className="w-full bg-[#0c0e15] border border-white/10 rounded px-2 py-1 text-white"
                             />
                           </div>
-                          <div>
+                          <div className="col-span-2 sm:col-span-1">
                             <label className="text-[10px] text-slate-400 block">Scorecard URL</label>
                             <input
                               type="url"
@@ -1531,7 +1605,19 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
                           </div>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-2 pt-1">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                          <select
+                            value={g.status || 'upcoming'}
+                            onChange={(e) => handleUpdateBadmintonGame(g.id, {
+                              status: e.target.value as MatchStatus,
+                              ...(e.target.value === 'upcoming' ? { winnerTeamId: null } : {})
+                            })}
+                            className="bg-[#141824] border border-white/10 rounded px-2 py-1 text-white"
+                          >
+                            <option value="upcoming">Upcoming</option>
+                            <option value="live">Live</option>
+                            <option value="completed">Completed</option>
+                          </select>
                           <select
                             value={g.winnerTeamId || ''}
                             onChange={(e) => handleUpdateBadmintonGame(g.id, {
@@ -1614,7 +1700,22 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
 
                     {/* Admin quick edit for footvolley */}
                     {editingItemId === g.id && isAdmin && (
-                      <div className="w-full mt-2 pt-2 border-t border-white/10 grid grid-cols-3 gap-2">
+                      <div className="w-full mt-2 pt-2 border-t border-white/10 grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        <div>
+                          <label className="text-[10px] text-slate-400 block">Status</label>
+                          <select
+                            value={g.status || 'upcoming'}
+                            onChange={(e) => handleUpdateFootvolleyGame(g.id, {
+                              status: e.target.value as MatchStatus,
+                              ...(e.target.value === 'upcoming' ? { winnerTeamId: null } : {})
+                            })}
+                            className="w-full bg-[#0c0e15] border border-white/10 rounded px-2 py-1 text-white"
+                          >
+                            <option value="upcoming">Upcoming</option>
+                            <option value="live">Live</option>
+                            <option value="completed">Completed</option>
+                          </select>
+                        </div>
                         <div>
                           <label className="text-[10px] text-slate-400 block">{team1.name}</label>
                           <input
@@ -1623,7 +1724,6 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
                             onChange={(e) => handleUpdateFootvolleyGame(g.id, {
                               team1Score: Number(e.target.value) || 0,
                               winnerTeamId: Number(e.target.value) >= 25 ? 'team1' : g.team2Score >= 25 ? 'team2' : null,
-                              status: Number(e.target.value) >= 25 || g.team2Score >= 25 ? 'completed' : 'live',
                             })}
                             className="w-full bg-[#0c0e15] border border-white/10 rounded px-2 py-1 text-white"
                           />
@@ -1636,7 +1736,6 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
                             onChange={(e) => handleUpdateFootvolleyGame(g.id, {
                               team2Score: Number(e.target.value) || 0,
                               winnerTeamId: g.team1Score >= 25 ? 'team1' : Number(e.target.value) >= 25 ? 'team2' : null,
-                              status: g.team1Score >= 25 || Number(e.target.value) >= 25 ? 'completed' : 'live',
                             })}
                             className="w-full bg-[#0c0e15] border border-white/10 rounded px-2 py-1 text-white"
                           />
@@ -1891,7 +1990,19 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
                           </div>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-2 pt-1">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                          <select
+                            value={g.status || 'upcoming'}
+                            onChange={(e) => handleUpdateTableTennisGame(g.id, {
+                              status: e.target.value as MatchStatus,
+                              ...(e.target.value === 'upcoming' ? { winnerTeamId: null } : {})
+                            })}
+                            className="bg-[#141824] border border-white/10 rounded px-2 py-1 text-white"
+                          >
+                            <option value="upcoming">Upcoming</option>
+                            <option value="live">Live</option>
+                            <option value="completed">Completed</option>
+                          </select>
                           <select
                             value={g.winnerTeamId || ''}
                             onChange={(e) => handleUpdateTableTennisGame(g.id, {
@@ -1910,8 +2021,7 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
                             onChange={(e) => handleUpdateTableTennisGame(g.id, { scorecardImageUrl: e.target.value.trim() })}
                             placeholder="Scorecard Photo Link"
                             className="bg-[#141824] border border-white/10 rounded px-2 py-1 text-white"
-                          >
-                          </input>
+                          />
                         </div>
                       </div>
                     )}
@@ -1998,7 +2108,7 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
                     {/* Admin quick edit for stumble guys */}
                     {editingItemId === g.id && isAdmin && (
                       <div className="w-full mt-2 pt-2 border-t border-white/10 space-y-2">
-                        <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                           <div>
                             <label className="text-[10px] text-slate-400 block">Map Name</label>
                             <input
@@ -2009,6 +2119,21 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
                             />
                           </div>
                           <div>
+                            <label className="text-[10px] text-slate-400 block">Status</label>
+                            <select
+                              value={g.status || 'upcoming'}
+                              onChange={(e) => handleUpdateStumbleGuysGame(g.id, {
+                                status: e.target.value as MatchStatus,
+                                ...(e.target.value === 'upcoming' ? { winnerTeamId: null } : {})
+                              })}
+                              className="w-full bg-[#0c0e15] border border-white/10 rounded px-2 py-1 text-white"
+                            >
+                              <option value="upcoming">Upcoming</option>
+                              <option value="live">Live</option>
+                              <option value="completed">Completed</option>
+                            </select>
+                          </div>
+                          <div>
                             <label className="text-[10px] text-slate-400 block">{team1.name} Score</label>
                             <input
                               type="number"
@@ -2016,7 +2141,6 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
                               onChange={(e) => handleUpdateStumbleGuysGame(g.id, {
                                 team1Score: Number(e.target.value) || 0,
                                 winnerTeamId: Number(e.target.value) > g.team2Score ? 'team1' : g.team2Score > Number(e.target.value) ? 'team2' : null,
-                                status: 'completed',
                               })}
                               className="w-full bg-[#0c0e15] border border-white/10 rounded px-2 py-1 text-white"
                             />
@@ -2029,12 +2153,11 @@ export const GameScoreDetailModal: React.FC<GameScoreDetailModalProps> = ({
                               onChange={(e) => handleUpdateStumbleGuysGame(g.id, {
                                 team2Score: Number(e.target.value) || 0,
                                 winnerTeamId: g.team1Score > Number(e.target.value) ? 'team1' : Number(e.target.value) > g.team1Score ? 'team2' : null,
-                                status: 'completed',
                               })}
                               className="w-full bg-[#0c0e15] border border-white/10 rounded px-2 py-1 text-white"
                             />
                           </div>
-                          <div>
+                          <div className="col-span-2 sm:col-span-1">
                             <label className="text-[10px] text-slate-400 block">Winner</label>
                             <select
                               value={g.winnerTeamId || ''}

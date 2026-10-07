@@ -3,15 +3,20 @@ import { TournamentState } from '../types/tournament';
 import { TournamentCalculations } from '../utils/storage';
 import { ChevronDown, Flame } from 'lucide-react';
 import { WindReveal } from './WindReveal';
+import { GaramPrixCountdown } from './GaramPrixCountdown';
 
 interface MichskyHeroProps {
   state: TournamentState;
   stats: TournamentCalculations;
+  isAdmin?: boolean;
+  onOpenAdminSchedule?: () => void;
 }
 
 export const MichskyHero: React.FC<MichskyHeroProps> = ({
   state,
   stats,
+  isAdmin = false,
+  onOpenAdminSchedule,
 }) => {
   const team1 = state.teams.team1;
   const team2 = state.teams.team2;
@@ -62,8 +67,19 @@ export const MichskyHero: React.FC<MichskyHeroProps> = ({
           </div>
         </WindReveal>
 
+        {/* Live Countdown Banner */}
+        {state.countdownConfig?.enabled !== false && (
+          <WindReveal direction="up" delay={0.1}>
+            <GaramPrixCountdown
+              config={state.countdownConfig}
+              isAdmin={isAdmin}
+              onOpenAdminSchedule={onOpenAdminSchedule}
+            />
+          </WindReveal>
+        )}
+
         {/* Duel Score Board */}
-        <WindReveal direction="up" delay={0.15}>
+        <WindReveal direction="up" delay={0.18}>
           <div className="max-w-2xl mx-auto bg-[#0e1216] border border-white/[0.08] rounded-2xl p-6 sm:p-8 mt-6 shadow-2xl">
           <div className="grid grid-cols-2 items-center gap-6">
             {/* Team 1 Score */}

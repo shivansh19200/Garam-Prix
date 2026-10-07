@@ -122,8 +122,21 @@ export default function App() {
       />
 
       <main className="flex-1 w-full">
-        {/* Masthead / Hero */}
-        <MichskyHero state={tournamentState} stats={stats} />
+        {/* Masthead / Hero with Live Countdown */}
+        <MichskyHero
+          state={tournamentState}
+          stats={stats}
+          isAdmin={isAdmin}
+          onOpenAdminSchedule={() => {
+            const el = document.getElementById('admin-countdown-config');
+            if (el) {
+              el.scrollIntoView({ behavior: 'smooth' });
+            } else {
+              const adminSection = document.getElementById('section-admin');
+              if (adminSection) adminSection.scrollIntoView({ behavior: 'smooth' });
+            }
+          }}
+        />
 
         {/* Projects / Games Grid (Exact layout from image.png with 3D flashcard animation) */}
         <MichskyGrid

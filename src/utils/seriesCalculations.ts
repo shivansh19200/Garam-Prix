@@ -1,5 +1,6 @@
 import {
   Match,
+  MatchStatus,
   DetailedCricketSeries,
   CricketTestMatch,
   DetailedSmashKartsSeries,
@@ -18,11 +19,14 @@ import {
 /**
  * Universal recalculator for any Garam Prix match.
  * Guarantees:
- * 1. Winning individual matches/games increments the team's series points (++).
- * 2. Winning the series (reaching target wins) marks the event as completed,
- *    assigns base & consolation points, and updates the standings table.
+ * 1. Changing the match status dropdown (Upcoming, Live, Completed) is strictly
+ *    respected and never forcibly overridden.
+ * 2. Series game wins (++), scores, and winners are recalculated dynamically.
+ * 3. Base & consolation points are awarded to standings when match is completed.
  */
 export function recalculateMatchOutcome(match: Match): Match {
+  const currentStatus: MatchStatus = match.status || 'upcoming';
+
   // -------------------------------------------------------------
   // 🏏 CRICKET (5-Match Test Series)
   // -------------------------------------------------------------
@@ -34,62 +38,64 @@ export function recalculateMatchOutcome(match: Match): Match {
 
     const updatedTests = series.tests.map((t) => {
       let winner = t.winnerTeamId;
+      const testStatus: MatchStatus = t.status || 'upcoming';
       const t1TotalRuns =
         (t.team1Innings1?.runs || 0) + (t.team1Innings2?.runs || 0);
       const t2TotalRuns =
         (t.team2Innings1?.runs || 0) + (t.team2Innings2?.runs || 0);
 
       // Auto deduce winner if test is completed and winner not manually selected
-      if (!winner && t.status === 'completed' && (t1TotalRuns > 0 || t2TotalRuns > 0)) {
+      if (!winner && testStatus === 'completed' && (t1TotalRuns > 0 || t2TotalRuns > 0)) {
         if (t1TotalRuns > t2TotalRuns) winner = 'team1';
         else if (t2TotalRuns > t1TotalRuns) winner = 'team2';
         else winner = 'draw';
       }
 
-      if (winner === 'team1') t1Wins++;
-      else if (winner === 'team2') t2Wins++;
-      else if (winner === 'draw') draws++;
+      // If test is upcoming, winner should not be assigned
+      if (testStatus === 'upcoming') {
+        winner = null;
+      }
+
+      // Only count towards series wins if test is completed
+      if (testStatus === 'completed') {
+        if (winner === 'team1') t1Wins++;
+        else if (winner === 'team2') t2Wins++;
+        else if (winner === 'draw') draws++;
+      }
 
       return {
         ...t,
+        status: testStatus,
         winnerTeamId: winner,
       };
     });
 
-    const isTargetReached = t1Wins >= 3 || t2Wins >= 3;
-    const isAllCompleted =
-      updatedTests.length > 0 && updatedTests.every((t) => t.status === 'completed');
+    let overallWinner: 'team1' | 'team2' | null = match.winnerTeamId || null;
+    if (t1Wins > t2Wins) overallWinner = 'team1';
+    else if (t2Wins > t1Wins) overallWinner = 'team2';
 
-    let overallWinner: 'team1' | 'team2' | null = null;
-    let status = match.status;
+    // Strictly preserve user/admin status
+    const isCompleted = currentStatus === 'completed';
 
-    if (t1Wins > t2Wins && (isTargetReached || isAllCompleted)) {
-      overallWinner = 'team1';
-      status = 'completed';
-    } else if (t2Wins > t1Wins && (isTargetReached || isAllCompleted)) {
-      overallWinner = 'team2';
-      status = 'completed';
-    } else if (t1Wins > 0 || t2Wins > 0 || updatedTests.some((t) => t.status === 'live')) {
-      status = 'live';
-    }
+    const t1Pts = isCompleted
+      ? (overallWinner === 'team1'
+          ? match.basePoints
+          : overallWinner === 'team2'
+          ? match.consolationPoints
+          : undefined)
+      : undefined;
 
-    const t1Pts =
-      overallWinner === 'team1'
-        ? match.basePoints
-        : overallWinner === 'team2'
-        ? match.consolationPoints
-        : undefined;
-
-    const t2Pts =
-      overallWinner === 'team2'
-        ? match.basePoints
-        : overallWinner === 'team1'
-        ? match.consolationPoints
-        : undefined;
+    const t2Pts = isCompleted
+      ? (overallWinner === 'team2'
+          ? match.basePoints
+          : overallWinner === 'team1'
+          ? match.consolationPoints
+          : undefined)
+      : undefined;
 
     return {
       ...match,
-      status,
+      status: currentStatus,
       winnerTeamId: overallWinner,
       team1ScoreDisplay: String(t1Wins),
       team2ScoreDisplay: String(t2Wins),
@@ -119,62 +125,56 @@ export function recalculateMatchOutcome(match: Match): Match {
 
     const updatedGames = series.games.map((g) => {
       let winner = g.winnerTeamId;
-      let status = g.status;
+      const gameStatus: MatchStatus = g.status || 'upcoming';
 
-      // Deduce winner if scores entered
-      if (g.team1Score > g.team2Score && (g.team1Score > 0 || g.team2Score > 0)) {
-        winner = 'team1';
-        status = 'completed';
-      } else if (g.team2Score > g.team1Score && (g.team1Score > 0 || g.team2Score > 0)) {
-        winner = 'team2';
-        status = 'completed';
+      // Deduce winner if scores entered and not upcoming
+      if (!winner && gameStatus === 'completed' && (g.team1Score > 0 || g.team2Score > 0)) {
+        if (g.team1Score > g.team2Score) winner = 'team1';
+        else if (g.team2Score > g.team1Score) winner = 'team2';
       }
 
-      if (winner === 'team1') t1Wins++;
-      else if (winner === 'team2') t2Wins++;
+      if (gameStatus === 'upcoming') {
+        winner = null;
+      }
+
+      // Only count completed games towards series wins
+      if (gameStatus === 'completed') {
+        if (winner === 'team1') t1Wins++;
+        else if (winner === 'team2') t2Wins++;
+      }
 
       return {
         ...g,
+        status: gameStatus,
         winnerTeamId: winner,
-        status,
       };
     });
 
-    const targetWins = series.targetWins || 4;
-    const isTargetReached = t1Wins >= targetWins || t2Wins >= targetWins;
-    const isAllCompleted =
-      updatedGames.length > 0 && updatedGames.every((g) => g.status === 'completed');
+    let overallWinner: 'team1' | 'team2' | null = match.winnerTeamId || null;
+    if (t1Wins > t2Wins) overallWinner = 'team1';
+    else if (t2Wins > t1Wins) overallWinner = 'team2';
 
-    let overallWinner: 'team1' | 'team2' | null = null;
-    let status = match.status;
+    const isCompleted = currentStatus === 'completed';
 
-    if (t1Wins >= targetWins || (isAllCompleted && t1Wins > t2Wins)) {
-      overallWinner = 'team1';
-      status = 'completed';
-    } else if (t2Wins >= targetWins || (isAllCompleted && t2Wins > t1Wins)) {
-      overallWinner = 'team2';
-      status = 'completed';
-    } else if (t1Wins > 0 || t2Wins > 0 || updatedGames.some((g) => g.status === 'live')) {
-      status = 'live';
-    }
+    const t1Pts = isCompleted
+      ? (overallWinner === 'team1'
+          ? match.basePoints
+          : overallWinner === 'team2'
+          ? match.consolationPoints
+          : undefined)
+      : undefined;
 
-    const t1Pts =
-      overallWinner === 'team1'
-        ? match.basePoints
-        : overallWinner === 'team2'
-        ? match.consolationPoints
-        : undefined;
-
-    const t2Pts =
-      overallWinner === 'team2'
-        ? match.basePoints
-        : overallWinner === 'team1'
-        ? match.consolationPoints
-        : undefined;
+    const t2Pts = isCompleted
+      ? (overallWinner === 'team2'
+          ? match.basePoints
+          : overallWinner === 'team1'
+          ? match.consolationPoints
+          : undefined)
+      : undefined;
 
     return {
       ...match,
-      status,
+      status: currentStatus,
       winnerTeamId: overallWinner,
       team1ScoreDisplay: String(t1Wins),
       team2ScoreDisplay: String(t2Wins),
@@ -215,65 +215,57 @@ export function recalculateMatchOutcome(match: Match): Match {
       else if (g.set3.team2 > g.set3.team1 && (g.set3.team1 > 0 || g.set3.team2 > 0)) t2Sets++;
 
       let winner = g.winnerTeamId;
-      let status = g.status;
+      const gameStatus: MatchStatus = g.status || 'upcoming';
 
-      if (t1Sets >= 2) {
-        winner = 'team1';
-        status = 'completed';
-      } else if (t2Sets >= 2) {
-        winner = 'team2';
-        status = 'completed';
-      } else if (t1Sets > 0 || t2Sets > 0) {
-        status = 'live';
+      if (!winner && gameStatus === 'completed' && (t1Sets > 0 || t2Sets > 0)) {
+        if (t1Sets > t2Sets) winner = 'team1';
+        else if (t2Sets > t1Sets) winner = 'team2';
       }
 
-      if (winner === 'team1') t1Wins++;
-      else if (winner === 'team2') t2Wins++;
+      if (gameStatus === 'upcoming') {
+        winner = null;
+      }
+
+      // Only count completed games towards series wins
+      if (gameStatus === 'completed') {
+        if (winner === 'team1') t1Wins++;
+        else if (winner === 'team2') t2Wins++;
+      }
 
       return {
         ...g,
+        status: gameStatus,
         team1SetsWon: t1Sets,
         team2SetsWon: t2Sets,
         winnerTeamId: winner,
-        status,
       };
     });
 
-    const targetWins = series.targetWins || 2;
-    const isTargetReached = t1Wins >= targetWins || t2Wins >= targetWins;
-    const isAllCompleted =
-      updatedGames.length > 0 && updatedGames.every((g) => g.status === 'completed');
+    let overallWinner: 'team1' | 'team2' | null = match.winnerTeamId || null;
+    if (t1Wins > t2Wins) overallWinner = 'team1';
+    else if (t2Wins > t1Wins) overallWinner = 'team2';
 
-    let overallWinner: 'team1' | 'team2' | null = null;
-    let status = match.status;
+    const isCompleted = currentStatus === 'completed';
 
-    if (t1Wins >= targetWins || (isAllCompleted && t1Wins > t2Wins)) {
-      overallWinner = 'team1';
-      status = 'completed';
-    } else if (t2Wins >= targetWins || (isAllCompleted && t2Wins > t1Wins)) {
-      overallWinner = 'team2';
-      status = 'completed';
-    } else if (t1Wins > 0 || t2Wins > 0 || updatedGames.some((g) => g.status === 'live')) {
-      status = 'live';
-    }
+    const t1Pts = isCompleted
+      ? (overallWinner === 'team1'
+          ? match.basePoints
+          : overallWinner === 'team2'
+          ? match.consolationPoints
+          : undefined)
+      : undefined;
 
-    const t1Pts =
-      overallWinner === 'team1'
-        ? match.basePoints
-        : overallWinner === 'team2'
-        ? match.consolationPoints
-        : undefined;
-
-    const t2Pts =
-      overallWinner === 'team2'
-        ? match.basePoints
-        : overallWinner === 'team1'
-        ? match.consolationPoints
-        : undefined;
+    const t2Pts = isCompleted
+      ? (overallWinner === 'team2'
+          ? match.basePoints
+          : overallWinner === 'team1'
+          ? match.consolationPoints
+          : undefined)
+      : undefined;
 
     return {
       ...match,
-      status,
+      status: currentStatus,
       winnerTeamId: overallWinner,
       team1ScoreDisplay: String(t1Wins),
       team2ScoreDisplay: String(t2Wins),
@@ -301,63 +293,54 @@ export function recalculateMatchOutcome(match: Match): Match {
 
     const updatedGames = series.games.map((g) => {
       let winner = g.winnerTeamId;
-      let status = g.status;
+      const gameStatus: MatchStatus = g.status || 'upcoming';
 
-      if (g.team1Score >= 25 && g.team1Score > g.team2Score) {
-        winner = 'team1';
-        status = 'completed';
-      } else if (g.team2Score >= 25 && g.team2Score > g.team1Score) {
-        winner = 'team2';
-        status = 'completed';
-      } else if (g.team1Score > 0 || g.team2Score > 0) {
-        status = 'live';
+      if (!winner && gameStatus === 'completed' && (g.team1Score > 0 || g.team2Score > 0)) {
+        if (g.team1Score > g.team2Score) winner = 'team1';
+        else if (g.team2Score > g.team1Score) winner = 'team2';
       }
 
-      if (winner === 'team1') t1Wins++;
-      else if (winner === 'team2') t2Wins++;
+      if (gameStatus === 'upcoming') {
+        winner = null;
+      }
+
+      if (gameStatus === 'completed') {
+        if (winner === 'team1') t1Wins++;
+        else if (winner === 'team2') t2Wins++;
+      }
 
       return {
         ...g,
+        status: gameStatus,
         winnerTeamId: winner,
-        status,
       };
     });
 
-    const targetWins = series.targetWins || 2;
-    const isTargetReached = t1Wins >= targetWins || t2Wins >= targetWins;
-    const isAllCompleted =
-      updatedGames.length > 0 && updatedGames.every((g) => g.status === 'completed');
+    let overallWinner: 'team1' | 'team2' | null = match.winnerTeamId || null;
+    if (t1Wins > t2Wins) overallWinner = 'team1';
+    else if (t2Wins > t1Wins) overallWinner = 'team2';
 
-    let overallWinner: 'team1' | 'team2' | null = null;
-    let status = match.status;
+    const isCompleted = currentStatus === 'completed';
 
-    if (t1Wins >= targetWins || (isAllCompleted && t1Wins > t2Wins)) {
-      overallWinner = 'team1';
-      status = 'completed';
-    } else if (t2Wins >= targetWins || (isAllCompleted && t2Wins > t1Wins)) {
-      overallWinner = 'team2';
-      status = 'completed';
-    } else if (t1Wins > 0 || t2Wins > 0 || updatedGames.some((g) => g.status === 'live')) {
-      status = 'live';
-    }
+    const t1Pts = isCompleted
+      ? (overallWinner === 'team1'
+          ? match.basePoints
+          : overallWinner === 'team2'
+          ? match.consolationPoints
+          : undefined)
+      : undefined;
 
-    const t1Pts =
-      overallWinner === 'team1'
-        ? match.basePoints
-        : overallWinner === 'team2'
-        ? match.consolationPoints
-        : undefined;
-
-    const t2Pts =
-      overallWinner === 'team2'
-        ? match.basePoints
-        : overallWinner === 'team1'
-        ? match.consolationPoints
-        : undefined;
+    const t2Pts = isCompleted
+      ? (overallWinner === 'team2'
+          ? match.basePoints
+          : overallWinner === 'team1'
+          ? match.consolationPoints
+          : undefined)
+      : undefined;
 
     return {
       ...match,
-      status,
+      status: currentStatus,
       winnerTeamId: overallWinner,
       team1ScoreDisplay: String(t1Wins),
       team2ScoreDisplay: String(t2Wins),
@@ -384,36 +367,36 @@ export function recalculateMatchOutcome(match: Match): Match {
     const t2 = bball.team2Points;
 
     let winner = bball.winnerTeamId;
-    let status = match.status;
+    if (!winner && (t1 > 0 || t2 > 0)) {
+      if (t1 >= 30 || (currentStatus === 'completed' && t1 > t2)) winner = 'team1';
+      else if (t2 >= 30 || (currentStatus === 'completed' && t2 > t1)) winner = 'team2';
+    }
 
-    if (t1 >= 30) {
-      winner = 'team1';
-      status = 'completed';
-    } else if (t2 >= 30) {
-      winner = 'team2';
-      status = 'completed';
-    } else if (t1 > 0 || t2 > 0) {
-      status = 'live';
+    if (currentStatus === 'upcoming') {
       winner = null;
     }
 
-    const t1Pts =
-      winner === 'team1'
-        ? match.basePoints
-        : winner === 'team2'
-        ? match.consolationPoints
-        : undefined;
+    const isCompleted = currentStatus === 'completed';
 
-    const t2Pts =
-      winner === 'team2'
-        ? match.basePoints
-        : winner === 'team1'
-        ? match.consolationPoints
-        : undefined;
+    const t1Pts = isCompleted
+      ? (winner === 'team1'
+          ? match.basePoints
+          : winner === 'team2'
+          ? match.consolationPoints
+          : undefined)
+      : undefined;
+
+    const t2Pts = isCompleted
+      ? (winner === 'team2'
+          ? match.basePoints
+          : winner === 'team1'
+          ? match.consolationPoints
+          : undefined)
+      : undefined;
 
     return {
       ...match,
-      status,
+      status: currentStatus,
       winnerTeamId: winner,
       team1ScoreDisplay: String(t1),
       team2ScoreDisplay: String(t2),
@@ -451,64 +434,56 @@ export function recalculateMatchOutcome(match: Match): Match {
       else if (g.set3.team2 > g.set3.team1 && (g.set3.team1 > 0 || g.set3.team2 > 0)) t2Sets++;
 
       let winner = g.winnerTeamId;
-      let status = g.status;
+      const gameStatus: MatchStatus = g.status || 'upcoming';
 
-      if (t1Sets >= 2) {
-        winner = 'team1';
-        status = 'completed';
-      } else if (t2Sets >= 2) {
-        winner = 'team2';
-        status = 'completed';
-      } else if (t1Sets > 0 || t2Sets > 0) {
-        status = 'live';
+      if (!winner && gameStatus === 'completed' && (t1Sets > 0 || t2Sets > 0)) {
+        if (t1Sets > t2Sets) winner = 'team1';
+        else if (t2Sets > t1Sets) winner = 'team2';
       }
 
-      if (winner === 'team1') t1Wins++;
-      else if (winner === 'team2') t2Wins++;
+      if (gameStatus === 'upcoming') {
+        winner = null;
+      }
+
+      if (gameStatus === 'completed') {
+        if (winner === 'team1') t1Wins++;
+        else if (winner === 'team2') t2Wins++;
+      }
 
       return {
         ...g,
+        status: gameStatus,
         team1SetsWon: t1Sets,
         team2SetsWon: t2Sets,
         winnerTeamId: winner,
-        status,
       };
     });
 
-    const targetWins = series.targetWins || 2;
-    const isAllCompleted =
-      updatedGames.length > 0 && updatedGames.every((g) => g.status === 'completed');
+    let overallWinner: 'team1' | 'team2' | null = match.winnerTeamId || null;
+    if (t1Wins > t2Wins) overallWinner = 'team1';
+    else if (t2Wins > t1Wins) overallWinner = 'team2';
 
-    let overallWinner: 'team1' | 'team2' | null = null;
-    let status = match.status;
+    const isCompleted = currentStatus === 'completed';
 
-    if (t1Wins >= targetWins || (isAllCompleted && t1Wins > t2Wins)) {
-      overallWinner = 'team1';
-      status = 'completed';
-    } else if (t2Wins >= targetWins || (isAllCompleted && t2Wins > t1Wins)) {
-      overallWinner = 'team2';
-      status = 'completed';
-    } else if (t1Wins > 0 || t2Wins > 0 || updatedGames.some((g) => g.status === 'live')) {
-      status = 'live';
-    }
+    const t1Pts = isCompleted
+      ? (overallWinner === 'team1'
+          ? match.basePoints
+          : overallWinner === 'team2'
+          ? match.consolationPoints
+          : undefined)
+      : undefined;
 
-    const t1Pts =
-      overallWinner === 'team1'
-        ? match.basePoints
-        : overallWinner === 'team2'
-        ? match.consolationPoints
-        : undefined;
-
-    const t2Pts =
-      overallWinner === 'team2'
-        ? match.basePoints
-        : overallWinner === 'team1'
-        ? match.consolationPoints
-        : undefined;
+    const t2Pts = isCompleted
+      ? (overallWinner === 'team2'
+          ? match.basePoints
+          : overallWinner === 'team1'
+          ? match.consolationPoints
+          : undefined)
+      : undefined;
 
     return {
       ...match,
-      status,
+      status: currentStatus,
       winnerTeamId: overallWinner,
       team1ScoreDisplay: String(t1Wins),
       team2ScoreDisplay: String(t2Wins),
@@ -536,60 +511,54 @@ export function recalculateMatchOutcome(match: Match): Match {
 
     const updatedGames = series.games.map((g) => {
       let winner = g.winnerTeamId;
-      let status = g.status;
+      const gameStatus: MatchStatus = g.status || 'upcoming';
 
-      if (g.team1Score > g.team2Score && (g.team1Score > 0 || g.team2Score > 0)) {
-        winner = 'team1';
-        status = 'completed';
-      } else if (g.team2Score > g.team1Score && (g.team1Score > 0 || g.team2Score > 0)) {
-        winner = 'team2';
-        status = 'completed';
+      if (!winner && gameStatus === 'completed' && (g.team1Score > 0 || g.team2Score > 0)) {
+        if (g.team1Score > g.team2Score) winner = 'team1';
+        else if (g.team2Score > g.team1Score) winner = 'team2';
       }
 
-      if (winner === 'team1') t1Wins++;
-      else if (winner === 'team2') t2Wins++;
+      if (gameStatus === 'upcoming') {
+        winner = null;
+      }
+
+      if (gameStatus === 'completed') {
+        if (winner === 'team1') t1Wins++;
+        else if (winner === 'team2') t2Wins++;
+      }
 
       return {
         ...g,
+        status: gameStatus,
         winnerTeamId: winner,
-        status,
       };
     });
 
-    const targetWins = series.targetWins || 3;
-    const isAllCompleted =
-      updatedGames.length > 0 && updatedGames.every((g) => g.status === 'completed');
+    let overallWinner: 'team1' | 'team2' | null = match.winnerTeamId || null;
+    if (t1Wins > t2Wins) overallWinner = 'team1';
+    else if (t2Wins > t1Wins) overallWinner = 'team2';
 
-    let overallWinner: 'team1' | 'team2' | null = null;
-    let status = match.status;
+    const isCompleted = currentStatus === 'completed';
 
-    if (t1Wins >= targetWins || (isAllCompleted && t1Wins > t2Wins)) {
-      overallWinner = 'team1';
-      status = 'completed';
-    } else if (t2Wins >= targetWins || (isAllCompleted && t2Wins > t1Wins)) {
-      overallWinner = 'team2';
-      status = 'completed';
-    } else if (t1Wins > 0 || t2Wins > 0 || updatedGames.some((g) => g.status === 'live')) {
-      status = 'live';
-    }
+    const t1Pts = isCompleted
+      ? (overallWinner === 'team1'
+          ? match.basePoints
+          : overallWinner === 'team2'
+          ? match.consolationPoints
+          : undefined)
+      : undefined;
 
-    const t1Pts =
-      overallWinner === 'team1'
-        ? match.basePoints
-        : overallWinner === 'team2'
-        ? match.consolationPoints
-        : undefined;
-
-    const t2Pts =
-      overallWinner === 'team2'
-        ? match.basePoints
-        : overallWinner === 'team1'
-        ? match.consolationPoints
-        : undefined;
+    const t2Pts = isCompleted
+      ? (overallWinner === 'team2'
+          ? match.basePoints
+          : overallWinner === 'team1'
+          ? match.consolationPoints
+          : undefined)
+      : undefined;
 
     return {
       ...match,
-      status,
+      status: currentStatus,
       winnerTeamId: overallWinner,
       team1ScoreDisplay: String(t1Wins),
       team2ScoreDisplay: String(t2Wins),
@@ -612,24 +581,24 @@ export function recalculateMatchOutcome(match: Match): Match {
   // GENERIC MATCH
   // -------------------------------------------------------------
   const winner = match.winnerTeamId;
-  const isCompleted = match.status === 'completed' || !!winner;
+  const isCompleted = currentStatus === 'completed';
 
-  let t1Pts = match.team1PointsAwarded;
-  let t2Pts = match.team2PointsAwarded;
+  let t1Pts: number | undefined = undefined;
+  let t2Pts: number | undefined = undefined;
 
-  if (winner === 'team1') {
-    t1Pts = match.basePoints;
-    t2Pts = match.consolationPoints;
-  } else if (winner === 'team2') {
-    t1Pts = match.consolationPoints;
-    t2Pts = match.basePoints;
-  } else if (!isCompleted) {
-    t1Pts = undefined;
-    t2Pts = undefined;
+  if (isCompleted) {
+    if (winner === 'team1') {
+      t1Pts = match.basePoints;
+      t2Pts = match.consolationPoints;
+    } else if (winner === 'team2') {
+      t1Pts = match.consolationPoints;
+      t2Pts = match.basePoints;
+    }
   }
 
   return {
     ...match,
+    status: currentStatus,
     winnerTeamId: winner,
     team1PointsAwarded: t1Pts,
     team2PointsAwarded: t2Pts,

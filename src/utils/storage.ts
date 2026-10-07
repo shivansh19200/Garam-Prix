@@ -1,9 +1,16 @@
-import { TournamentState } from '../types/tournament';
+import { TournamentState, CountdownConfig } from '../types/tournament';
 import { INITIAL_TOURNAMENT_DATA } from '../data/initialTournamentData';
 import { recalculateMatchOutcome } from './seriesCalculations';
 import { getTeamMvpSummary, DEFAULT_MVP_CONFIG } from './mvpCalculations';
 
 const STORAGE_KEY = 'garam_prix_gp_state_v5';
+
+export const DEFAULT_COUNTDOWN_CONFIG: CountdownConfig = {
+  targetDate: '2026-10-11T17:00:00',
+  title: 'LIVE IN',
+  subtitle: 'Tentative · 11th October, 5:00 PM',
+  enabled: true,
+};
 
 export function loadTournamentState(): TournamentState {
   try {
@@ -18,6 +25,7 @@ export function loadTournamentState(): TournamentState {
     return {
       ...parsed,
       mvpConfig: parsed.mvpConfig || DEFAULT_MVP_CONFIG,
+      countdownConfig: parsed.countdownConfig || DEFAULT_COUNTDOWN_CONFIG,
       matches: normalizedMatches,
     };
   } catch (err) {

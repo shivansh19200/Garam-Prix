@@ -18,10 +18,12 @@ import {
   DetailedStumbleGuysSeries,
   StumbleGuysGame,
   MvpPointConfig,
+  CountdownConfig,
 } from '../types/tournament';
 import { formatMatchScoreDisplay } from '../utils/cricketFormat';
 import { recalculateMatchOutcome } from '../utils/seriesCalculations';
 import { DEFAULT_MVP_CONFIG } from '../utils/mvpCalculations';
+import { DEFAULT_COUNTDOWN_CONFIG } from '../utils/storage';
 import { sortMatchesBySchedule, formatFriendlyDate } from '../utils/dateCalculations';
 import { ConfirmDialog } from './ConfirmDialog';
 import {
@@ -125,7 +127,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       m.id === currentMatch.id ? recalculated : m
     );
     onUpdateState({ ...state, matches: updatedMatches });
-    showFlash('Updated.');
+    showFlash(partial.status ? `Match status updated to ${partial.status.toUpperCase()}!` : 'Updated.');
+  };
+
+  const countdownConfig = state.countdownConfig || DEFAULT_COUNTDOWN_CONFIG;
+
+  const handleUpdateCountdownConfig = (partial: Partial<CountdownConfig>) => {
+    onUpdateState({
+      ...state,
+      countdownConfig: {
+        ...countdownConfig,
+        ...partial,
+      },
+    });
+    showFlash('Live clash countdown timer updated.');
   };
 
   const mvpConfig = state.mvpConfig || DEFAULT_MVP_CONFIG;
@@ -313,24 +328,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     let draws = 0;
 
     const updatedTests = cricketSeries.tests.map((t) => {
-      const updated = t.id === testId ? { ...t, ...partial } : t;
-      if (updated.winnerTeamId === 'team1') t1Wins++;
-      else if (updated.winnerTeamId === 'team2') t2Wins++;
-      else if (updated.winnerTeamId === 'draw') draws++;
+      let updated = t.id === testId ? { ...t, ...partial } : t;
+      if (updated.status === 'upcoming') {
+        updated = { ...updated, winnerTeamId: null };
+      }
+      if (updated.status === 'completed') {
+        if (updated.winnerTeamId === 'team1') t1Wins++;
+        else if (updated.winnerTeamId === 'team2') t2Wins++;
+        else if (updated.winnerTeamId === 'draw') draws++;
+      }
       return updated;
     });
 
     const isSeriesDecided =
       t1Wins >= 3 || t2Wins >= 3 || updatedTests.every((t) => t.status === 'completed');
-    let overallWinner: 'team1' | 'team2' | null = null;
-    let status = currentMatch.status;
+    let overallWinner: 'team1' | 'team2' | null = currentMatch.winnerTeamId || null;
 
     if (t1Wins > t2Wins && isSeriesDecided) {
       overallWinner = 'team1';
-      status = 'completed';
     } else if (t2Wins > t1Wins && isSeriesDecided) {
       overallWinner = 'team2';
-      status = 'completed';
     }
 
     const updatedSeries: DetailedCricketSeries = {
@@ -342,22 +359,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     };
 
     handleUpdateMatch({
-      status,
       winnerTeamId: overallWinner,
       team1ScoreDisplay: String(t1Wins),
       team2ScoreDisplay: String(t2Wins),
-      team1PointsAwarded:
-        overallWinner === 'team1'
-          ? currentMatch.basePoints
-          : overallWinner === 'team2'
-          ? currentMatch.consolationPoints
-          : undefined,
-      team2PointsAwarded:
-        overallWinner === 'team2'
-          ? currentMatch.basePoints
-          : overallWinner === 'team1'
-          ? currentMatch.consolationPoints
-          : undefined,
       detailedScore: { type: 'cricket_series', data: updatedSeries },
     });
   };
@@ -572,25 +576,50 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     if (!currentMatch || currentMatch.detailedScore?.type !== 'smash_karts_series') return;
     const smashSeries = currentMatch.detailedScore.data;
 
+    let t1Wins = 0;
+    let t2Wins = 0;
+
     const updatedGames = smashSeries.games.map((g) => {
-      if (g.id !== gameId) return g;
+      if (g.id !== gameId) {
+        if (g.status === 'completed') {
+          if (g.winnerTeamId === 'team1') t1Wins++;
+          else if (g.winnerTeamId === 'team2') t2Wins++;
+        }
+        return g;
+      }
       const updated = { ...g, ...partial };
-      if (updated.team1Score > updated.team2Score && (updated.team1Score > 0 || updated.team2Score > 0)) {
-        updated.winnerTeamId = 'team1';
-        updated.status = 'completed';
-      } else if (updated.team2Score > updated.team1Score && (updated.team1Score > 0 || updated.team2Score > 0)) {
-        updated.winnerTeamId = 'team2';
-        updated.status = 'completed';
+      if (!partial.status) {
+        if (updated.team1Score > updated.team2Score && (updated.team1Score > 0 || updated.team2Score > 0)) {
+          updated.winnerTeamId = 'team1';
+          updated.status = 'completed';
+        } else if (updated.team2Score > updated.team1Score && (updated.team1Score > 0 || updated.team2Score > 0)) {
+          updated.winnerTeamId = 'team2';
+          updated.status = 'completed';
+        }
+      }
+      if (updated.status === 'upcoming') {
+        updated.winnerTeamId = null;
+      }
+      if (updated.status === 'completed') {
+        if (updated.winnerTeamId === 'team1') t1Wins++;
+        else if (updated.winnerTeamId === 'team2') t2Wins++;
       }
       return updated;
     });
 
+    const seriesWinner = t1Wins >= smashSeries.targetWins ? 'team1' : t2Wins >= smashSeries.targetWins ? 'team2' : currentMatch.winnerTeamId || null;
+
     const updatedSeries: DetailedSmashKartsSeries = {
       ...smashSeries,
+      team1SeriesWins: t1Wins,
+      team2SeriesWins: t2Wins,
       games: updatedGames,
     };
 
     handleUpdateMatch({
+      winnerTeamId: seriesWinner,
+      team1ScoreDisplay: String(t1Wins),
+      team2ScoreDisplay: String(t2Wins),
       detailedScore: { type: 'smash_karts_series', data: updatedSeries },
     });
   };
@@ -605,14 +634,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     let t1Wins = 0;
     let t2Wins = 0;
     const updatedGames = series.games.map((g) => {
-      const updated = g.id === gameId ? { ...g, ...partial } : g;
-      if (updated.winnerTeamId === 'team1') t1Wins++;
-      else if (updated.winnerTeamId === 'team2') t2Wins++;
+      let updated = g.id === gameId ? { ...g, ...partial } : g;
+      if (updated.status === 'upcoming') {
+        updated = { ...updated, winnerTeamId: null };
+      }
+      if (updated.status === 'completed') {
+        if (updated.winnerTeamId === 'team1') t1Wins++;
+        else if (updated.winnerTeamId === 'team2') t2Wins++;
+      }
       return updated;
     });
 
-    const isWinner = t1Wins >= series.targetWins || t2Wins >= series.targetWins;
-    const seriesWinner = t1Wins >= series.targetWins ? 'team1' : t2Wins >= series.targetWins ? 'team2' : null;
+    const seriesWinner = t1Wins >= series.targetWins ? 'team1' : t2Wins >= series.targetWins ? 'team2' : currentMatch.winnerTeamId || null;
 
     const updatedSeries: DetailedBadmintonSeries = {
       ...series,
@@ -622,12 +655,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     };
 
     handleUpdateMatch({
-      status: isWinner ? 'completed' : currentMatch.status,
       winnerTeamId: seriesWinner,
       team1ScoreDisplay: String(t1Wins),
       team2ScoreDisplay: String(t2Wins),
-      team1PointsAwarded: seriesWinner === 'team1' ? currentMatch.basePoints : seriesWinner === 'team2' ? currentMatch.consolationPoints : undefined,
-      team2PointsAwarded: seriesWinner === 'team2' ? currentMatch.basePoints : seriesWinner === 'team1' ? currentMatch.consolationPoints : undefined,
       detailedScore: { type: 'badminton_series', data: updatedSeries },
     });
   };
@@ -639,14 +669,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     let t1Wins = 0;
     let t2Wins = 0;
     const updatedGames = series.games.map((g) => {
-      const updated = g.id === gameId ? { ...g, ...partial } : g;
-      if (updated.winnerTeamId === 'team1') t1Wins++;
-      else if (updated.winnerTeamId === 'team2') t2Wins++;
+      let updated = g.id === gameId ? { ...g, ...partial } : g;
+      if (updated.status === 'upcoming') {
+        updated = { ...updated, winnerTeamId: null };
+      }
+      if (updated.status === 'completed') {
+        if (updated.winnerTeamId === 'team1') t1Wins++;
+        else if (updated.winnerTeamId === 'team2') t2Wins++;
+      }
       return updated;
     });
 
-    const isWinner = t1Wins >= series.targetWins || t2Wins >= series.targetWins;
-    const seriesWinner = t1Wins >= series.targetWins ? 'team1' : t2Wins >= series.targetWins ? 'team2' : null;
+    const seriesWinner = t1Wins >= series.targetWins ? 'team1' : t2Wins >= series.targetWins ? 'team2' : currentMatch.winnerTeamId || null;
 
     const updatedSeries: DetailedFootvolleySeries = {
       ...series,
@@ -656,12 +690,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     };
 
     handleUpdateMatch({
-      status: isWinner ? 'completed' : currentMatch.status,
       winnerTeamId: seriesWinner,
       team1ScoreDisplay: String(t1Wins),
       team2ScoreDisplay: String(t2Wins),
-      team1PointsAwarded: seriesWinner === 'team1' ? currentMatch.basePoints : seriesWinner === 'team2' ? currentMatch.consolationPoints : undefined,
-      team2PointsAwarded: seriesWinner === 'team2' ? currentMatch.basePoints : seriesWinner === 'team1' ? currentMatch.consolationPoints : undefined,
       detailedScore: { type: 'footvolley_series', data: updatedSeries },
     });
   };
@@ -674,8 +705,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     let t2Wins = 0;
     const updatedGames = series.games.map((g) => {
       if (g.id !== gameId) {
-        if (g.winnerTeamId === 'team1') t1Wins++;
-        else if (g.winnerTeamId === 'team2') t2Wins++;
+        if (g.status === 'completed') {
+          if (g.winnerTeamId === 'team1') t1Wins++;
+          else if (g.winnerTeamId === 'team2') t2Wins++;
+        }
         return g;
       }
       const updated = { ...g, ...partial };
@@ -693,7 +726,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       updated.team1SetsWon = t1Sets;
       updated.team2SetsWon = t2Sets;
 
-      if (!partial.winnerTeamId) {
+      if (!partial.status && !partial.winnerTeamId) {
         if (t1Sets >= 2) {
           updated.winnerTeamId = 'team1';
           updated.status = 'completed';
@@ -705,14 +738,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         }
       }
 
-      if (updated.winnerTeamId === 'team1') t1Wins++;
-      else if (updated.winnerTeamId === 'team2') t2Wins++;
+      if (updated.status === 'upcoming') {
+        updated.winnerTeamId = null;
+      }
+
+      if (updated.status === 'completed') {
+        if (updated.winnerTeamId === 'team1') t1Wins++;
+        else if (updated.winnerTeamId === 'team2') t2Wins++;
+      }
 
       return updated;
     });
 
-    const isWinner = t1Wins >= series.targetWins || t2Wins >= series.targetWins;
-    const seriesWinner = t1Wins >= series.targetWins ? 'team1' : t2Wins >= series.targetWins ? 'team2' : null;
+    const seriesWinner = t1Wins >= series.targetWins ? 'team1' : t2Wins >= series.targetWins ? 'team2' : currentMatch.winnerTeamId || null;
 
     const updatedSeries: DetailedTableTennisSeries = {
       ...series,
@@ -722,12 +760,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     };
 
     handleUpdateMatch({
-      status: isWinner ? 'completed' : (t1Wins > 0 || t2Wins > 0 ? 'live' : currentMatch.status),
       winnerTeamId: seriesWinner,
       team1ScoreDisplay: String(t1Wins),
       team2ScoreDisplay: String(t2Wins),
-      team1PointsAwarded: seriesWinner === 'team1' ? currentMatch.basePoints : seriesWinner === 'team2' ? currentMatch.consolationPoints : undefined,
-      team2PointsAwarded: seriesWinner === 'team2' ? currentMatch.basePoints : seriesWinner === 'team1' ? currentMatch.consolationPoints : undefined,
       detailedScore: { type: 'table_tennis_series', data: updatedSeries },
     });
   };
@@ -740,12 +775,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     let t2Wins = 0;
     const updatedGames = series.games.map((g) => {
       if (g.id !== gameId) {
-        if (g.winnerTeamId === 'team1') t1Wins++;
-        else if (g.winnerTeamId === 'team2') t2Wins++;
+        if (g.status === 'completed') {
+          if (g.winnerTeamId === 'team1') t1Wins++;
+          else if (g.winnerTeamId === 'team2') t2Wins++;
+        }
         return g;
       }
       const updated = { ...g, ...partial };
-      if (!partial.winnerTeamId) {
+      if (!partial.status && !partial.winnerTeamId) {
         if (updated.team1Score > updated.team2Score && (updated.team1Score > 0 || updated.team2Score > 0)) {
           updated.winnerTeamId = 'team1';
           updated.status = 'completed';
@@ -755,14 +792,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         }
       }
 
-      if (updated.winnerTeamId === 'team1') t1Wins++;
-      else if (updated.winnerTeamId === 'team2') t2Wins++;
+      if (updated.status === 'upcoming') {
+        updated.winnerTeamId = null;
+      }
+
+      if (updated.status === 'completed') {
+        if (updated.winnerTeamId === 'team1') t1Wins++;
+        else if (updated.winnerTeamId === 'team2') t2Wins++;
+      }
 
       return updated;
     });
 
-    const isWinner = t1Wins >= series.targetWins || t2Wins >= series.targetWins;
-    const seriesWinner = t1Wins >= series.targetWins ? 'team1' : t2Wins >= series.targetWins ? 'team2' : null;
+    const seriesWinner = t1Wins >= series.targetWins ? 'team1' : t2Wins >= series.targetWins ? 'team2' : currentMatch.winnerTeamId || null;
 
     const updatedSeries: DetailedStumbleGuysSeries = {
       ...series,
@@ -772,12 +814,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     };
 
     handleUpdateMatch({
-      status: isWinner ? 'completed' : (t1Wins > 0 || t2Wins > 0 ? 'live' : currentMatch.status),
       winnerTeamId: seriesWinner,
       team1ScoreDisplay: String(t1Wins),
       team2ScoreDisplay: String(t2Wins),
-      team1PointsAwarded: seriesWinner === 'team1' ? currentMatch.basePoints : seriesWinner === 'team2' ? currentMatch.consolationPoints : undefined,
-      team2PointsAwarded: seriesWinner === 'team2' ? currentMatch.basePoints : seriesWinner === 'team1' ? currentMatch.consolationPoints : undefined,
       detailedScore: { type: 'stumble_guys_series', data: updatedSeries },
     });
   };
@@ -887,6 +926,96 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             {flashMsg}
           </span>
         )}
+      </div>
+
+      {/* Live Clash Countdown Configuration */}
+      <div id="admin-countdown-config" className="bg-[#0e1216] border border-white/[0.08] rounded-2xl p-6 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/25 flex items-center justify-center text-amber-400">
+              <Clock className="w-5 h-5 animate-pulse" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-semibold text-white uppercase tracking-wider">
+                  Live Clash Countdown Timer
+                </h3>
+                <span className="text-[10px] uppercase font-bold text-amber-300 bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded-full">
+                  Tentative 11 Oct 5:00 PM
+                </span>
+              </div>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Displays the "LIVE IN .." banner on the Masthead. Customize target clash date and title.
+              </p>
+            </div>
+          </div>
+
+          <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-300 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10 transition-colors">
+            <span>Show Countdown</span>
+            <input
+              type="checkbox"
+              checked={countdownConfig.enabled !== false}
+              onChange={(e) => handleUpdateCountdownConfig({ enabled: e.target.checked })}
+              className="w-4 h-4 rounded accent-amber-500 cursor-pointer"
+            />
+          </label>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 text-xs">
+          <div>
+            <label className="text-[10px] text-slate-400 block mb-1 font-semibold uppercase flex items-center gap-1">
+              <Calendar className="w-3 h-3 text-sky-400" />
+              <span>Target Date & Time</span>
+            </label>
+            <input
+              type="datetime-local"
+              value={countdownConfig.targetDate ? countdownConfig.targetDate.slice(0, 16) : '2026-10-11T17:00'}
+              onChange={(e) => handleUpdateCountdownConfig({ targetDate: e.target.value })}
+              className="w-full bg-[#141824] border border-white/10 rounded-lg px-3 py-2 text-white outline-none focus:border-amber-400/50"
+            />
+          </div>
+
+          <div>
+            <label className="text-[10px] text-slate-400 block mb-1 font-semibold uppercase">
+              Countdown Banner Title
+            </label>
+            <input
+              type="text"
+              value={countdownConfig.title || 'LIVE IN'}
+              onChange={(e) => handleUpdateCountdownConfig({ title: e.target.value })}
+              placeholder="e.g. LIVE IN"
+              className="w-full bg-[#141824] border border-white/10 rounded-lg px-3 py-2 text-white outline-none focus:border-amber-400/50"
+            />
+          </div>
+
+          <div>
+            <label className="text-[10px] text-slate-400 block mb-1 font-semibold uppercase">
+              Schedule Subtitle
+            </label>
+            <input
+              type="text"
+              value={countdownConfig.subtitle || ''}
+              onChange={(e) => handleUpdateCountdownConfig({ subtitle: e.target.value })}
+              placeholder="e.g. Tentatively 11th October 2026 · 5:00 PM"
+              className="w-full bg-[#141824] border border-white/10 rounded-lg px-3 py-2 text-white outline-none focus:border-amber-400/50"
+            />
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
+          <button
+            type="button"
+            onClick={() => handleUpdateCountdownConfig({
+              targetDate: '2026-10-11T17:00:00',
+              title: 'LIVE IN',
+              subtitle: 'Tentatively 11th October 2026 · 5:00 PM',
+              enabled: true,
+            })}
+            className="px-3 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-lg transition-colors cursor-pointer font-medium"
+          >
+            Reset to 11th Oct 5:00 PM
+          </button>
+        </div>
       </div>
 
       {/* Match Selector & Series Managers */}
@@ -1609,7 +1738,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
                     {/* Quick edit */}
                     {editingSmashId === g.id && (
-                      <div className="w-full mt-2 pt-2 border-t border-white/10 grid grid-cols-4 gap-2">
+                      <div className="w-full mt-2 pt-2 border-t border-white/10 grid grid-cols-2 sm:grid-cols-5 gap-2">
                         <div>
                           <label className="text-[10px] text-slate-400 block">Type</label>
                           <select
@@ -1619,6 +1748,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           >
                             <option value="TDM">TDM</option>
                             <option value="CTF">CTF</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-slate-400 block">Status</label>
+                          <select
+                            value={g.status || 'upcoming'}
+                            onChange={(e) => handleUpdateSmashGame(g.id, {
+                              status: e.target.value as MatchStatus,
+                              ...(e.target.value === 'upcoming' ? { winnerTeamId: null } : {})
+                            })}
+                            className="w-full bg-[#0c0e15] border border-white/10 rounded px-2 py-1 text-white"
+                          >
+                            <option value="upcoming">Upcoming</option>
+                            <option value="live">Live</option>
+                            <option value="completed">Completed</option>
                           </select>
                         </div>
                         <div>
@@ -1772,7 +1916,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <select
+                          value={g.status || 'upcoming'}
+                          onChange={(e) => handleUpdateBadmintonGame(g.id, {
+                            status: e.target.value as MatchStatus,
+                            ...(e.target.value === 'upcoming' ? { winnerTeamId: null } : {})
+                          })}
+                          className="bg-[#141824] border border-white/10 rounded p-1 text-white"
+                        >
+                          <option value="upcoming">Upcoming</option>
+                          <option value="live">Live</option>
+                          <option value="completed">Completed</option>
+                        </select>
                         <select
                           value={g.winnerTeamId || ''}
                           onChange={(e) => handleUpdateBadmintonGame(g.id, {
@@ -1833,7 +1989,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   </div>
 
                   {editingFootvolleyId === g.id && (
-                    <div className="w-full mt-2 pt-2 border-t border-white/10 grid grid-cols-3 gap-2">
+                    <div className="w-full mt-2 pt-2 border-t border-white/10 grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      <select
+                        value={g.status || 'upcoming'}
+                        onChange={(e) => handleUpdateFootvolleyGame(g.id, {
+                          status: e.target.value as MatchStatus,
+                          ...(e.target.value === 'upcoming' ? { winnerTeamId: null } : {})
+                        })}
+                        className="bg-[#0c0e15] border border-white/10 rounded px-2 py-1 text-white"
+                      >
+                        <option value="upcoming">Upcoming</option>
+                        <option value="live">Live</option>
+                        <option value="completed">Completed</option>
+                      </select>
                       <input
                         type="number"
                         value={g.team1Score}
@@ -1972,7 +2140,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-2 pt-1">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                        <select
+                          value={g.status || 'upcoming'}
+                          onChange={(e) => handleUpdateTableTennisGame(g.id, {
+                            status: e.target.value as MatchStatus,
+                            ...(e.target.value === 'upcoming' ? { winnerTeamId: null } : {})
+                          })}
+                          className="bg-[#141824] border border-white/10 rounded px-2 py-1 text-white"
+                        >
+                          <option value="upcoming">Upcoming</option>
+                          <option value="live">Live</option>
+                          <option value="completed">Completed</option>
+                        </select>
                         <select
                           value={g.winnerTeamId || ''}
                           onChange={(e) => handleUpdateTableTennisGame(g.id, {
@@ -2044,7 +2224,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   </div>
 
                   {editingSGId === g.id && (
-                    <div className="w-full mt-2 pt-2 border-t border-white/10 grid grid-cols-1 sm:grid-cols-4 gap-2">
+                    <div className="w-full mt-2 pt-2 border-t border-white/10 grid grid-cols-1 sm:grid-cols-5 gap-2">
                       <input
                         type="text"
                         value={g.mapName}
@@ -2052,13 +2232,24 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         placeholder="Map Name"
                         className="bg-[#0c0e15] border border-white/10 rounded px-2 py-1 text-white"
                       />
+                      <select
+                        value={g.status || 'upcoming'}
+                        onChange={(e) => handleUpdateStumbleGuysGame(g.id, {
+                          status: e.target.value as MatchStatus,
+                          ...(e.target.value === 'upcoming' ? { winnerTeamId: null } : {})
+                        })}
+                        className="bg-[#0c0e15] border border-white/10 rounded px-2 py-1 text-white"
+                      >
+                        <option value="upcoming">Upcoming</option>
+                        <option value="live">Live</option>
+                        <option value="completed">Completed</option>
+                      </select>
                       <input
                         type="number"
                         value={g.team1Score}
                         onChange={(e) => handleUpdateStumbleGuysGame(g.id, {
                           team1Score: Number(e.target.value) || 0,
                           winnerTeamId: Number(e.target.value) > g.team2Score ? 'team1' : g.team2Score > Number(e.target.value) ? 'team2' : null,
-                          status: 'completed',
                         })}
                         placeholder={`${state.teams.team1.name} Score`}
                         className="bg-[#0c0e15] border border-white/10 rounded px-2 py-1 text-white"
@@ -2069,7 +2260,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         onChange={(e) => handleUpdateStumbleGuysGame(g.id, {
                           team2Score: Number(e.target.value) || 0,
                           winnerTeamId: g.team1Score > Number(e.target.value) ? 'team1' : Number(e.target.value) > g.team1Score ? 'team2' : null,
-                          status: 'completed',
                         })}
                         placeholder={`${state.teams.team2.name} Score`}
                         className="bg-[#0c0e15] border border-white/10 rounded px-2 py-1 text-white"
@@ -2320,12 +2510,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     <select
                       value={m.status}
                       onChange={(e) => {
+                        const newStatus = e.target.value as MatchStatus;
                         const updated = state.matches.map((item) =>
-                          item.id === m.id ? { ...item, status: e.target.value as MatchStatus } : item
+                          item.id === m.id ? { ...item, status: newStatus } : item
                         );
                         onUpdateState({ ...state, matches: updated });
+                        showFlash(`Updated ${m.gameName} status to ${newStatus.toUpperCase()}!`);
                       }}
-                      className="bg-[#141824] border border-white/10 rounded px-2 py-1 text-white text-xs outline-none"
+                      className="bg-[#141824] border border-white/10 rounded px-2 py-1 text-white text-xs outline-none cursor-pointer"
                     >
                       <option value="upcoming">Upcoming</option>
                       <option value="live">Live</option>

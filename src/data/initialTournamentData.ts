@@ -5,6 +5,12 @@ export const INITIAL_TOURNAMENT_DATA: TournamentState = {
   tournamentTitle: 'GARAM PRIX (GP)',
   subtitle: '8 MEN · 2 TEAMS · 7 GAMES · 1 CHAMPION',
   mvpConfig: DEFAULT_MVP_CONFIG,
+  countdownConfig: {
+    targetDate: '2026-10-11T17:00:00',
+    title: 'LIVE IN',
+    subtitle: 'Tentative · 11th October, 5:00 PM',
+    enabled: true,
+  },
   teams: {
     team1: {
       id: 'team1',

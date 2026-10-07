@@ -294,6 +294,13 @@ export interface MvpAwardItem {
   resultSummary?: string;
 }
 
+export interface CountdownConfig {
+  targetDate: string; // ISO date-time string e.g. 2026-10-11T17:00:00
+  title: string;      // e.g. 'LIVE IN'
+  subtitle?: string;  // e.g. 'Tentative · 11th October, 5:00 PM'
+  enabled: boolean;
+}
+
 export interface TournamentState {
   tournamentTitle: string;
   subtitle: string;
@@ -304,5 +311,6 @@ export interface TournamentState {
   players: Player[];
   matches: Match[];
   mvpConfig?: MvpPointConfig;
+  countdownConfig?: CountdownConfig;
   isTournamentConcluded?: boolean;
 }
