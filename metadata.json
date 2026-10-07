@@ -1,0 +1,8 @@
+{
+  "name": "Remix Garam Prix — GP Championship Hub - v02",
+  "description": "Official championship portal for GP (Garam Prix). 8 men, 2 teams, 7 games across 3 tiers, live scores, schedule, match update tracker, and admin control room.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
